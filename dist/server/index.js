@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
+import { existsSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { Server } from 'socket.io';
@@ -11,17 +12,24 @@ import { addDamage, addDeath, addKill, applyDamage, isRespawnDue, remainingMatch
 import { circleHitsPlayer, resetPhysicsPlayer, segmentHitsPlatform, stepPlayer } from './physics.js';
 const PORT = Number(process.env.PORT ?? 3000);
 const DEFAULT_CAPACITY = Math.min(30, Math.max(2, Number(process.env.MAX_PLAYERS ?? 30)));
+const MIN_PLAYERS_TO_START = 2;
 const DEFAULT_DURATION = Math.max(30, Number(process.env.MATCH_DURATION_SECONDS ?? 300));
-const HOST_SECRET = process.env.HOST_SECRET ?? 'change-me';
+const HOST_SECRET = process.env.HOST_SECRET?.trim() ?? '';
 const CORS_ORIGIN = process.env.CORS_ORIGIN ?? true;
 const ROOM_ID = 'office-militia';
 const app = express();
 app.use(cors({ origin: CORS_ORIGIN, credentials: true }));
 app.use(express.json());
-app.get('/health', (_req, res) => res.json({ ok: true, service: 'call-of-lendians', phase: room.phase, players: room.players.size, capacity: room.capacity }));
+app.get('/health', (_req, res) => res.json({ ok: true, service: 'redline-protocol', phase: room.phase, players: room.players.size, capacity: room.capacity }));
 const distClient = join(dirname(fileURLToPath(import.meta.url)), '../client');
-app.use(express.static(distClient));
-app.get('*', (_req, res) => res.sendFile(join(distClient, 'index.html')));
+const distClientIndex = join(distClient, 'index.html');
+if (existsSync(distClientIndex)) {
+    app.use(express.static(distClient));
+    app.get('*', (_req, res) => res.sendFile(distClientIndex));
+}
+else {
+    app.get('/', (_req, res) => res.json({ ok: true, service: 'redline-protocol', message: 'Backend is running. Open the frontend at http://localhost:5173.' }));
+}
 const httpServer = createServer(app);
 const io = new Server(httpServer, {
     cors: { origin: CORS_ORIGIN, credentials: true },
@@ -118,8 +126,8 @@ function announce(message, type = 'info') {
     io.to(ROOM_ID).emit('notice', { message, type });
 }
 function startCountdown(now) {
-    if (room.players.size === 0)
-        return;
+    if (room.players.size < MIN_PLAYERS_TO_START)
+        return false;
     resetScores();
     room.projectiles.clear();
     room.killFeed = [];
@@ -130,6 +138,7 @@ function startCountdown(now) {
     for (const player of room.players.values())
         spawnPlayer(player, now);
     announce('Match starting — lock and load.');
+    return true;
 }
 function beginMatch(now) {
     room.phase = 'PLAYING';
@@ -156,19 +165,24 @@ function returnToLobby() {
         player.input = defaultInput();
     }
 }
-function validateHost(secret) {
-    return Boolean(secret) && secret === HOST_SECRET;
+function validateHost(socket, secret) {
+    const player = [...room.players.values()].find((candidate) => candidate.socketId === socket.id);
+    const isRoomHost = Boolean(player && room.hostId === player.id);
+    const hasValidSecret = Boolean(HOST_SECRET) && secret === HOST_SECRET;
+    return isRoomHost || hasValidSecret;
 }
 function handleHostAction(socket, payload) {
-    if (!validateHost(payload.secret)) {
+    if (!validateHost(socket, payload.secret)) {
         socket.emit('errorMessage', { message: 'Host secret rejected.' });
         return;
     }
     const now = Date.now();
     switch (payload.action) {
         case 'start':
-            if (room.phase === 'LOBBY' || room.phase === 'RESULTS')
-                startCountdown(now);
+            if (room.phase === 'LOBBY' || room.phase === 'RESULTS') {
+                if (!startCountdown(now))
+                    socket.emit('errorMessage', { message: 'At least 2 operatives are required to deploy.' });
+            }
             break;
         case 'pause':
             if (room.phase === 'PLAYING')
@@ -179,6 +193,10 @@ function handleHostAction(socket, payload) {
                 endMatch();
             break;
         case 'restart':
+            if (room.players.size < MIN_PLAYERS_TO_START) {
+                socket.emit('errorMessage', { message: 'At least 2 operatives are required to deploy.' });
+                break;
+            }
             returnToLobby();
             startCountdown(now);
             break;
@@ -374,5 +392,5 @@ setInterval(() => {
             room.disconnected.delete(record.playerId);
         }
 }, 60_000);
-httpServer.listen(PORT, () => console.log(`Call of Lendians server listening on http://localhost:${PORT}`));
+httpServer.listen(PORT, () => console.log(`Redline Protocol server listening on http://localhost:${PORT}`));
 //# sourceMappingURL=index.js.map

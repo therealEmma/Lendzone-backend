@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
+import { existsSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { Server, Socket } from 'socket.io';
@@ -17,7 +18,7 @@ const PORT = Number(process.env.PORT ?? 3000);
 const DEFAULT_CAPACITY = Math.min(30, Math.max(2, Number(process.env.MAX_PLAYERS ?? 30)));
 const MIN_PLAYERS_TO_START = 2;
 const DEFAULT_DURATION = Math.max(30, Number(process.env.MATCH_DURATION_SECONDS ?? 300));
-const HOST_SECRET = process.env.HOST_SECRET ?? 'change-me';
+const HOST_SECRET = process.env.HOST_SECRET?.trim() ?? '';
 const CORS_ORIGIN = process.env.CORS_ORIGIN ?? true;
 const ROOM_ID = 'office-militia';
 
@@ -68,8 +69,13 @@ app.use(express.json());
 app.get('/health', (_req, res) => res.json({ ok: true, service: 'redline-protocol', phase: room.phase, players: room.players.size, capacity: room.capacity }));
 
 const distClient = join(dirname(fileURLToPath(import.meta.url)), '../client');
-app.use(express.static(distClient));
-app.get('*', (_req, res) => res.sendFile(join(distClient, 'index.html')));
+const distClientIndex = join(distClient, 'index.html');
+if (existsSync(distClientIndex)) {
+  app.use(express.static(distClient));
+  app.get('*', (_req, res) => res.sendFile(distClientIndex));
+} else {
+  app.get('/', (_req, res) => res.json({ ok: true, service: 'redline-protocol', message: 'Backend is running. Open the frontend at http://localhost:5173.' }));
+}
 
 const httpServer = createServer(app);
 const io = new Server(httpServer, {
@@ -221,12 +227,15 @@ function returnToLobby(): void {
   }
 }
 
-function validateHost(secret: string): boolean {
-  return Boolean(secret) && secret === HOST_SECRET;
+function validateHost(socket: Socket, secret: string): boolean {
+  const player = [...room.players.values()].find((candidate) => candidate.socketId === socket.id);
+  const isRoomHost = Boolean(player && room.hostId === player.id);
+  const hasValidSecret = Boolean(HOST_SECRET) && secret === HOST_SECRET;
+  return isRoomHost || hasValidSecret;
 }
 
 function handleHostAction(socket: Socket, payload: HostActionPayload): void {
-  if (!validateHost(payload.secret)) {
+  if (!validateHost(socket, payload.secret)) {
     socket.emit('errorMessage', { message: 'Host secret rejected.' });
     return;
   }
