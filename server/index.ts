@@ -17,7 +17,7 @@ const DEFAULT_CAPACITY = Number.isFinite(configuredCapacity) ? Math.min(30, Math
 const MIN_PLAYERS_TO_START = 2;
 const DEFAULT_DURATION = Math.max(30, Number(process.env.MATCH_DURATION_SECONDS ?? 300));
 const HOST_SECRET = process.env.HOST_SECRET?.trim() ?? '';
-const configuredCorsOrigins = (process.env.CORS_ORIGIN ?? '').split(',').map((origin) => origin.trim()).filter(Boolean);
+const configuredCorsOrigins = (process.env.CORS_ORIGIN ?? '').split(',').map((origin) => origin.trim().replace(/\/+$/, '')).filter(Boolean);
 const allowAllOrigins = configuredCorsOrigins.length === 0 || configuredCorsOrigins.includes('*');
 const corsOrigin = (origin: string | undefined, callback: (error: Error | null, origin?: boolean) => void): void => {
   if (!origin || allowAllOrigins || configuredCorsOrigins.includes(origin)) callback(null, true);
