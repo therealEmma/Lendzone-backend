@@ -315,6 +315,17 @@ function simulationTick() {
 io.on('connection', (socket) => {
     socket.emit('connected', { connectionId: socket.id, maxPlayers: room.capacity });
     socket.on('join', (payload) => {
+        const existingPlayerId = socket.data.playerId;
+        const existingPlayer = existingPlayerId ? room.players.get(existingPlayerId) : undefined;
+        if (existingPlayer && existingPlayer.socketId === socket.id) {
+            const now = Date.now();
+            const existingToken = [...room.tokens.entries()].find(([, record]) => record.playerId === existingPlayer.id && record.expiresAt > now)?.[0];
+            const reconnectToken = existingToken || randomBytes(18).toString('hex');
+            room.tokens.set(reconnectToken, { playerId: existingPlayer.id, expiresAt: now + 24 * 60 * 60 * 1000 });
+            const session = { id: existingPlayer.id, reconnectToken, isHost: room.hostId === existingPlayer.id, phase: room.phase, maxPlayers: room.capacity };
+            socket.emit('session', session);
+            return;
+        }
         if (room.players.size >= room.capacity && !payload.reconnectToken) {
             socket.emit('errorMessage', { message: 'The arena is full. Try the next round.' });
             return;
