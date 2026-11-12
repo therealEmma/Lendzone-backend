@@ -12,12 +12,20 @@ import { addDamage, addDeath, addKill, applyDamage, isRespawnDue, remainingMatch
 import { circleHitsPlayer, PLAYER_SPAWNS, resetPhysicsPlayer, segmentHitsPlatform, stepPlayer } from './physics.js';
 
 const PORT = Number(process.env.PORT ?? 3000);
-const DEFAULT_CAPACITY = Math.min(30, Math.max(2, Number(process.env.MAX_PLAYERS ?? 30)));
+const configuredCapacity = Number(process.env.MAX_PLAYERS ?? 30);
+const DEFAULT_CAPACITY = Number.isFinite(configuredCapacity) ? Math.min(30, Math.max(2, configuredCapacity)) : 30;
 const MIN_PLAYERS_TO_START = 2;
 const DEFAULT_DURATION = Math.max(30, Number(process.env.MATCH_DURATION_SECONDS ?? 300));
 const HOST_SECRET = process.env.HOST_SECRET?.trim() ?? '';
-const CORS_ORIGIN = process.env.CORS_ORIGIN ?? true;
-const ROOM_ID = 'office-militia';
+const configuredCorsOrigins = (process.env.CORS_ORIGIN ?? '').split(',').map((origin) => origin.trim()).filter(Boolean);
+const allowAllOrigins = configuredCorsOrigins.length === 0 || configuredCorsOrigins.includes('*');
+const corsOrigin = (origin: string | undefined, callback: (error: Error | null, origin?: boolean) => void): void => {
+  if (!origin || allowAllOrigins || configuredCorsOrigins.includes(origin)) callback(null, true);
+  else callback(new Error(`CORS origin rejected: ${origin}`));
+};
+const ROOM_ID = process.env.ROOM_ID?.trim() || 'lendzone-main';
+const INSTANCE_ID = process.env.RAILWAY_REPLICA_ID || process.env.RAILWAY_INSTANCE_ID || randomUUID().slice(0, 8);
+const DEBUG_COMBAT = process.env.DEBUG_COMBAT === '1';
 
 interface ServerPlayer {
   id: string;
@@ -61,14 +69,14 @@ interface Projectile {
 }
 
 const app = express();
-app.use(cors({ origin: CORS_ORIGIN, credentials: true }));
+app.use(cors({ origin: corsOrigin, credentials: true }));
 app.use(express.json());
-app.get('/health', (_req, res) => res.json({ ok: true, service: 'lendzone', phase: room.phase, players: room.players.size, capacity: room.capacity }));
-app.get('/', (_req, res) => res.json({ ok: true, service: 'lendzone', message: 'Backend is running. Open the frontend on its Vercel URL.' }));
+app.get('/health', (_req, res) => res.json({ ok: true, service: 'lendzone', roomId: ROOM_ID, instanceId: INSTANCE_ID, phase: room.phase, players: room.players.size, capacity: room.capacity, socketPath: '/socket.io' }));
+app.get('/', (_req, res) => res.json({ ok: true, service: 'lendzone', message: 'Backend is running. Open the public frontend URL.' }));
 
 const httpServer = createServer(app);
 const io = new Server(httpServer, {
-  cors: { origin: CORS_ORIGIN, credentials: true },
+  cors: { origin: corsOrigin, credentials: true },
   pingInterval: 10_000,
   pingTimeout: 20_000,
   maxHttpBufferSize: 30_000,
@@ -158,7 +166,7 @@ function playerSnapshot(player: ServerPlayer): PlayerSnapshot {
 function createSnapshot(now: number): GameSnapshot {
   const timeRemaining = room.phase === 'PLAYING' ? remainingMatchMs(room.phase, room.matchEndsAt, now) : room.phase === 'COUNTDOWN' ? Math.max(0, room.countdownEndsAt - now) : 0;
   return {
-    serverTime: now, phase: room.phase, paused: room.paused, timeRemaining, countdown: room.phase === 'COUNTDOWN' ? Math.ceil(timeRemaining / 1000) : 0,
+    roomId: ROOM_ID, serverInstanceId: INSTANCE_ID, serverTime: now, phase: room.phase, paused: room.paused, timeRemaining, countdown: room.phase === 'COUNTDOWN' ? Math.ceil(timeRemaining / 1000) : 0,
     playerCount: room.players.size, maxPlayers: room.capacity, hostId: room.hostId,
     players: [...room.players.values()].map(playerSnapshot),
     projectiles: [...room.projectiles.values()].map(({ id, x, y, vx, vy, ownerId }) => ({ id, x, y, vx, vy, ownerId })),
@@ -334,14 +342,19 @@ function updatePlayer(player: ServerPlayer, dt: number, now: number): void {
     const angle = Number.isFinite(player.aimAngle) ? player.aimAngle : 0;
     const directionX = Math.cos(angle);
     const directionY = Math.sin(angle);
-    room.projectiles.set(room.nextProjectileId, {
+    const projectile: Projectile = {
       id: room.nextProjectileId++, ownerId: player.id,
       x: player.x + WORLD.playerWidth / 2 + directionX * 24,
       y: player.y + 25 + directionY * 24,
       vx: directionX * WORLD.bulletSpeed + player.vx * 0.35,
       vy: directionY * WORLD.bulletSpeed + player.vy * 0.15,
       ttl: WORLD.bulletLifetime,
-    });
+    };
+    room.projectiles.set(projectile.id, projectile);
+    // Reliable shot events make short-lived bullets visible to remote clients even
+    // when a projectile is created and hits between two volatile snapshots.
+    io.to(ROOM_ID).emit('shot', { id: projectile.id, ownerId: projectile.ownerId, x: projectile.x, y: projectile.y, vx: projectile.vx, vy: projectile.vy });
+    if (DEBUG_COMBAT) console.log(`[combat] shot room=${ROOM_ID} player=${player.id} projectile=${projectile.id} angle=${angle.toFixed(3)}`);
     player.ammo -= 1;
     player.nextShotAt = now + WORLD.fireInterval * 1000;
   }
@@ -366,9 +379,11 @@ function simulationTick(): void {
 }
 
 io.on('connection', (socket) => {
+  console.log(`[socket] connected id=${socket.id} origin=${String(socket.handshake.headers.origin ?? 'direct')} instance=${INSTANCE_ID}`);
   socket.emit('connected', { connectionId: socket.id, maxPlayers: room.capacity });
 
   socket.on('join', (payload: JoinPayload) => {
+    payload = payload || { name: '', color: '' };
     const existingPlayerId = socket.data.playerId as string | undefined;
     const existingPlayer = existingPlayerId ? room.players.get(existingPlayerId) : undefined;
     if (existingPlayer && existingPlayer.socketId === socket.id) {
@@ -376,7 +391,7 @@ io.on('connection', (socket) => {
       const existingToken = [...room.tokens.entries()].find(([, record]) => record.playerId === existingPlayer.id && record.expiresAt > now)?.[0];
       const reconnectToken = existingToken || randomBytes(18).toString('hex');
       room.tokens.set(reconnectToken, { playerId: existingPlayer.id, expiresAt: now + 24 * 60 * 60 * 1000 });
-      const session: SessionPayload = { id: existingPlayer.id, reconnectToken, isHost: room.hostId === existingPlayer.id, phase: room.phase, maxPlayers: room.capacity };
+      const session: SessionPayload = { id: existingPlayer.id, reconnectToken, isHost: room.hostId === existingPlayer.id, phase: room.phase, maxPlayers: room.capacity, roomId: ROOM_ID, serverInstanceId: INSTANCE_ID };
       socket.emit('session', session);
       return;
     }
@@ -390,9 +405,19 @@ io.on('connection', (socket) => {
     if (token && token.expiresAt > now) {
       player = room.players.get(token.playerId) || room.disconnected.get(token.playerId);
       if (player) {
-        player.socketId = socket.id;
-        player.name = cleanName(payload.name || player.name);
-        player.color = cleanColor(payload.color || player.color);
+        if (player.socketId && player.socketId !== socket.id) {
+          // Do not let a second tab/device using the same stale token steal an
+          // active player's socket. It should join as a separate operative.
+          player = undefined;
+        } else {
+          player.socketId = socket.id;
+          player.name = cleanName(payload.name || player.name);
+          player.color = cleanColor(payload.color || player.color);
+          // Input sequence numbers are scoped to a socket connection. Resetting
+          // them here prevents a reconnect from being ignored forever.
+          player.lastInputSeq = 0;
+          player.input = defaultInput();
+        }
       }
     }
     if (!player) player = newPlayer(socket.id, payload, now);
@@ -403,8 +428,9 @@ io.on('connection', (socket) => {
     socket.join(ROOM_ID);
     const reconnectToken = payload.reconnectToken && token ? payload.reconnectToken : randomBytes(18).toString('hex');
     room.tokens.set(reconnectToken, { playerId: player.id, expiresAt: now + 24 * 60 * 60 * 1000 });
-    const session: SessionPayload = { id: player.id, reconnectToken, isHost: room.hostId === player.id, phase: room.phase, maxPlayers: room.capacity };
+    const session: SessionPayload = { id: player.id, reconnectToken, isHost: room.hostId === player.id, phase: room.phase, maxPlayers: room.capacity, roomId: ROOM_ID, serverInstanceId: INSTANCE_ID };
     socket.emit('session', session);
+    console.log(`[room] join room=${ROOM_ID} player=${player.id} name=${player.name} players=${room.players.size}/${room.capacity} phase=${room.phase}`);
     announce(`${player.name} joined the fireteam.`);
     broadcastSnapshot(now);
   });
@@ -413,7 +439,7 @@ io.on('connection', (socket) => {
     const player = room.players.get(socket.data.playerId);
     if (!player || !input || typeof input.seq !== 'number') return;
     if (input.seq <= player.lastInputSeq) return;
-    player.lastInputSeq = Math.min(input.seq, player.lastInputSeq + 3);
+    player.lastInputSeq = input.seq;
     player.input = {
       seq: player.lastInputSeq,
       left: Boolean(input.left), right: Boolean(input.right), jump: Boolean(input.jump), jetpack: Boolean(input.jetpack),
@@ -425,7 +451,8 @@ io.on('connection', (socket) => {
   socket.on('hostAction', (payload: HostActionPayload) => handleHostAction(socket, payload));
   socket.on('requestState', () => socket.emit('snapshot', createSnapshot(Date.now())));
 
-  socket.on('disconnect', () => {
+  socket.on('disconnect', (reason) => {
+    console.log(`[socket] disconnected id=${socket.id} reason=${reason}`);
     const playerId = socket.data.playerId as string | undefined;
     if (!playerId) return;
     const player = room.players.get(playerId);
@@ -449,4 +476,4 @@ setInterval(() => {
   }
 }, 60_000);
 
-httpServer.listen(PORT, () => console.log(`Lendzone server listening on http://localhost:${PORT}`));
+httpServer.listen(PORT, '0.0.0.0', () => console.log(`Lendzone server listening on port ${PORT} instance=${INSTANCE_ID} room=${ROOM_ID} maxPlayers=${room.capacity}`));

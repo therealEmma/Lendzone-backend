@@ -83,6 +83,8 @@ export interface LeaderboardEntry {
 }
 
 export interface GameSnapshot {
+  roomId: string;
+  serverInstanceId: string;
   serverTime: number;
   phase: MatchPhase;
   paused: boolean;
@@ -110,6 +112,8 @@ export interface SessionPayload {
   isHost: boolean;
   phase: MatchPhase;
   maxPlayers: number;
+  roomId: string;
+  serverInstanceId: string;
 }
 
 export interface HostActionPayload {
