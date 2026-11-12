@@ -149,6 +149,9 @@ function returnToLobby() {
     room.projectiles.clear();
     room.killFeed = [];
     for (const player of room.players.values()) {
+        player.hp = WORLD.playerMaxHp;
+        player.fuel = WORLD.maxFuel;
+        player.ammo = WORLD.magazineSize;
         player.alive = true;
         player.respawnAt = null;
         player.input = defaultInput();
@@ -188,6 +191,10 @@ function handleHostAction(socket, payload) {
             }
             returnToLobby();
             startCountdown(now);
+            break;
+        case 'lobby':
+            returnToLobby();
+            announce('Lobby reopened. Waiting for the next fireteam.');
             break;
         case 'duration':
             room.durationSeconds = Math.min(1_800, Math.max(30, Number(payload.durationSeconds) || DEFAULT_DURATION));

@@ -114,7 +114,7 @@ export interface SessionPayload {
 
 export interface HostActionPayload {
   secret: string;
-  action: 'start' | 'pause' | 'end' | 'restart' | 'duration' | 'capacity' | 'kick';
+  action: 'start' | 'pause' | 'end' | 'restart' | 'lobby' | 'duration' | 'capacity' | 'kick';
   durationSeconds?: number;
   capacity?: number;
   playerId?: string;
