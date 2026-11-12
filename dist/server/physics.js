@@ -46,25 +46,10 @@ export function stepPlayer(player, input, dt, platforms = PLATFORM_LAYOUT) {
         player.fuel = Math.min(WORLD.maxFuel, player.fuel + WORLD.fuelRechargePerSecond * dt);
     }
     const previousY = player.y;
-    const previousX = player.x;
     player.vy += WORLD.gravity * dt;
     player.x += player.vx * dt;
     player.y += player.vy * dt;
     player.x = Math.max(36, Math.min(WORLD.width - 36 - WORLD.playerWidth, player.x));
-    for (const platform of platforms) {
-        if (platform.kind !== 'cover' || player.y + WORLD.playerHeight <= platform.y + 5 || player.y >= platform.y + platform.height - 5)
-            continue;
-        const previousRight = previousX + WORLD.playerWidth;
-        const currentRight = player.x + WORLD.playerWidth;
-        if (player.vx > 0 && previousRight <= platform.x && currentRight > platform.x) {
-            player.x = platform.x - WORLD.playerWidth;
-            player.vx = 0;
-        }
-        else if (player.vx < 0 && previousX >= platform.x + platform.width && player.x < platform.x + platform.width) {
-            player.x = platform.x + platform.width;
-            player.vx = 0;
-        }
-    }
     player.grounded = false;
     if (player.vy >= 0) {
         for (const platform of platforms) {
