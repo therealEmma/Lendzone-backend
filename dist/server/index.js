@@ -288,7 +288,9 @@ function updatePlayer(player, dt, now) {
         player.reloadEndsAt = null;
     }
     stepPlayer(player, player.input, dt, PLATFORM_LAYOUT);
-    if (player.input.reload && player.ammo < WORLD.magazineSize && !player.reloadEndsAt)
+    // Reload automatically once the magazine is empty. The server owns this
+    // timer so every client sees the same reload window and refill moment.
+    if (player.ammo === 0 && !player.reloadEndsAt)
         player.reloadEndsAt = now + WORLD.reloadSeconds * 1000;
     if (player.input.shoot && player.ammo > 0 && !player.reloadEndsAt && now >= player.nextShotAt) {
         const angle = Number.isFinite(player.aimAngle) ? player.aimAngle : 0;
