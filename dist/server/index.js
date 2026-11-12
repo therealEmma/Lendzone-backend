@@ -12,6 +12,8 @@ const configuredCapacity = Number(process.env.MAX_PLAYERS ?? 30);
 const DEFAULT_CAPACITY = Number.isFinite(configuredCapacity) ? Math.min(30, Math.max(2, configuredCapacity)) : 30;
 const MIN_PLAYERS_TO_START = 2;
 const DEFAULT_DURATION = Math.max(30, Number(process.env.MATCH_DURATION_SECONDS ?? 300));
+const configuredReconnectGraceSeconds = Number(process.env.RECONNECT_GRACE_SECONDS ?? 120);
+const RECONNECT_GRACE_MS = (Number.isFinite(configuredReconnectGraceSeconds) ? Math.max(1, configuredReconnectGraceSeconds) : 120) * 1000;
 const HOST_SECRET = process.env.HOST_SECRET?.trim() ?? '';
 const configuredCorsOrigins = (process.env.CORS_ORIGIN ?? '').split(',').map((origin) => origin.trim().replace(/\/+$/, '')).filter(Boolean);
 const allowAllOrigins = configuredCorsOrigins.length === 0 || configuredCorsOrigins.includes('*');
@@ -27,7 +29,7 @@ const DEBUG_COMBAT = process.env.DEBUG_COMBAT === '1';
 const app = express();
 app.use(cors({ origin: corsOrigin, credentials: true }));
 app.use(express.json());
-app.get('/health', (_req, res) => res.json({ ok: true, service: 'lendzone', roomId: ROOM_ID, instanceId: INSTANCE_ID, phase: room.phase, players: room.players.size, capacity: room.capacity, socketPath: '/socket.io' }));
+app.get('/health', (_req, res) => res.json({ ok: true, service: 'lendzone', roomId: ROOM_ID, instanceId: INSTANCE_ID, phase: room.phase, players: room.players.size, disconnected: room.disconnected.size, occupancy: roomOccupancy(), capacity: room.capacity, reconnectGraceSeconds: RECONNECT_GRACE_MS / 1000, socketPath: '/socket.io' }));
 app.get('/', (_req, res) => res.json({ ok: true, service: 'lendzone', message: 'Backend is running. Open the public frontend URL.' }));
 const httpServer = createServer(app);
 const io = new Server(httpServer, {
@@ -54,6 +56,9 @@ const room = {
     spawnCursor: 0,
     lastSnapshotAt: 0,
 };
+function roomOccupancy() {
+    return room.players.size + room.disconnected.size;
+}
 const colorPalette = ['#ff4d6d', '#ff9f1c', '#ffe66d', '#2ec4b6', '#38bdf8', '#8b5cf6', '#f472b6', '#a3e635', '#fb7185', '#c084fc'];
 function cleanName(value) {
     const normalized = String(value ?? '').replace(/[^a-zA-Z0-9 _-]/g, '').trim().slice(0, 18);
@@ -211,7 +216,7 @@ function handleHostAction(socket, payload) {
             break;
         case 'capacity':
             if (room.phase === 'LOBBY' || room.phase === 'RESULTS') {
-                room.capacity = Math.min(30, Math.max(room.players.size, 2, Number(payload.capacity) || DEFAULT_CAPACITY));
+                room.capacity = Math.min(30, Math.max(roomOccupancy(), 2, Number(payload.capacity) || DEFAULT_CAPACITY));
                 announce(`Owner set the room capacity to ${room.capacity}.`);
             }
             break;
@@ -333,10 +338,21 @@ io.on('connection', (socket) => {
     socket.emit('connected', { connectionId: socket.id, maxPlayers: room.capacity });
     socket.on('join', (payload) => {
         payload = payload || { name: '', color: '' };
+        const now = Date.now();
+        const requestedToken = typeof payload.reconnectToken === 'string' ? payload.reconnectToken.trim() : '';
+        const token = requestedToken ? room.tokens.get(requestedToken) : undefined;
+        const reconnectAttempt = Boolean(requestedToken);
+        if (reconnectAttempt && (!token || token.expiresAt <= now)) {
+            if (token) {
+                room.tokens.delete(requestedToken);
+                room.disconnected.delete(token.playerId);
+            }
+            socket.emit('errorMessage', { code: 'RECONNECT_EXPIRED', message: 'Your previous operative session expired. Join again as a new operative.' });
+            return;
+        }
         const existingPlayerId = socket.data.playerId;
         const existingPlayer = existingPlayerId ? room.players.get(existingPlayerId) : undefined;
         if (existingPlayer && existingPlayer.socketId === socket.id) {
-            const now = Date.now();
             const existingToken = [...room.tokens.entries()].find(([, record]) => record.playerId === existingPlayer.id && record.expiresAt > now)?.[0];
             const reconnectToken = existingToken || randomBytes(18).toString('hex');
             room.tokens.set(reconnectToken, { playerId: existingPlayer.id, expiresAt: now + 24 * 60 * 60 * 1000 });
@@ -344,20 +360,18 @@ io.on('connection', (socket) => {
             socket.emit('session', session);
             return;
         }
-        if (room.players.size >= room.capacity && !payload.reconnectToken) {
+        if (roomOccupancy() >= room.capacity && !token) {
             socket.emit('errorMessage', { message: 'The arena is full. Try the next round.' });
             return;
         }
-        const now = Date.now();
         let player;
-        const token = payload.reconnectToken ? room.tokens.get(payload.reconnectToken) : undefined;
-        if (token && token.expiresAt > now) {
+        const rejoining = Boolean(token);
+        if (token) {
             player = room.players.get(token.playerId) || room.disconnected.get(token.playerId);
             if (player) {
                 if (player.socketId && player.socketId !== socket.id) {
-                    // Do not let a second tab/device using the same stale token steal an
-                    // active player's socket. It should join as a separate operative.
-                    player = undefined;
+                    socket.emit('errorMessage', { code: 'SESSION_ACTIVE', message: 'That operative is already connected. Open a new join session instead.' });
+                    return;
                 }
                 else {
                     player.socketId = socket.id;
@@ -370,20 +384,30 @@ io.on('connection', (socket) => {
                 }
             }
         }
+        if (rejoining && !player) {
+            room.tokens.delete(requestedToken);
+            socket.emit('errorMessage', { code: 'RECONNECT_EXPIRED', message: 'Your previous operative session expired. Join again as a new operative.' });
+            return;
+        }
         if (!player)
             player = newPlayer(socket.id, payload, now);
+        if (!rejoining && (room.phase === 'PLAYING' || room.phase === 'COUNTDOWN'))
+            player.spawnProtectedUntil = now + 2_000;
         room.disconnected.delete(player.id);
         room.players.set(player.id, player);
         if (!room.hostId)
             room.hostId = player.id;
         socket.data.playerId = player.id;
         socket.join(ROOM_ID);
-        const reconnectToken = payload.reconnectToken && token ? payload.reconnectToken : randomBytes(18).toString('hex');
+        const reconnectToken = randomBytes(18).toString('hex');
+        if (requestedToken)
+            room.tokens.delete(requestedToken);
         room.tokens.set(reconnectToken, { playerId: player.id, expiresAt: now + 24 * 60 * 60 * 1000 });
         const session = { id: player.id, reconnectToken, isHost: room.hostId === player.id, phase: room.phase, maxPlayers: room.capacity, roomId: ROOM_ID, serverInstanceId: INSTANCE_ID };
         socket.emit('session', session);
+        socket.emit('snapshot', createSnapshot(now));
         console.log(`[room] join room=${ROOM_ID} player=${player.id} name=${player.name} players=${room.players.size}/${room.capacity} phase=${room.phase}`);
-        announce(`${player.name} joined the fireteam.`);
+        announce(rejoining ? `${player.name} reconnected to the fireteam.` : `${player.name} joined the fireteam.`);
         broadcastSnapshot(now);
     });
     socket.on('input', (input) => {
@@ -411,8 +435,14 @@ io.on('connection', (socket) => {
         if (!player || player.socketId !== socket.id)
             return;
         player.socketId = '';
-        room.tokens.forEach((record, key) => { if (record.playerId === playerId)
-            record.expiresAt = Date.now() + 10 * 60 * 1000; });
+        player.input = defaultInput();
+        player.reloadEndsAt = null;
+        room.projectiles.forEach((projectile, projectileId) => {
+            if (projectile.ownerId === playerId)
+                room.projectiles.delete(projectileId);
+        });
+        room.tokens.forEach((record) => { if (record.playerId === playerId)
+            record.expiresAt = Date.now() + RECONNECT_GRACE_MS; });
         room.players.delete(playerId);
         room.disconnected.set(playerId, player);
         if (room.hostId === playerId)
