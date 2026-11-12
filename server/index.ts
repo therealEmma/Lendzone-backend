@@ -63,8 +63,8 @@ interface Projectile {
 const app = express();
 app.use(cors({ origin: CORS_ORIGIN, credentials: true }));
 app.use(express.json());
-app.get('/health', (_req, res) => res.json({ ok: true, service: 'redline-protocol', phase: room.phase, players: room.players.size, capacity: room.capacity }));
-app.get('/', (_req, res) => res.json({ ok: true, service: 'redline-protocol', message: 'Backend is running. Open the frontend on its Vercel URL.' }));
+app.get('/health', (_req, res) => res.json({ ok: true, service: 'lendzone', phase: room.phase, players: room.players.size, capacity: room.capacity }));
+app.get('/', (_req, res) => res.json({ ok: true, service: 'lendzone', message: 'Backend is running. Open the frontend on its Vercel URL.' }));
 
 const httpServer = createServer(app);
 const io = new Server(httpServer, {
@@ -431,4 +431,4 @@ setInterval(() => {
   }
 }, 60_000);
 
-httpServer.listen(PORT, () => console.log(`Redline Protocol server listening on http://localhost:${PORT}`));
+httpServer.listen(PORT, () => console.log(`Lendzone server listening on http://localhost:${PORT}`));
