@@ -1,12 +1,9 @@
 import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
-import { existsSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { Server, Socket } from 'socket.io';
-import { fileURLToPath } from 'node:url';
-import { dirname, join } from 'node:path';
 import {
   GameSnapshot, HostActionPayload, InputCommand, JoinPayload, KillFeedItem, LeaderboardEntry,
   PLATFORM_LAYOUT, PlayerSnapshot, ScoreLine, SessionPayload, WORLD, MatchPhase,
@@ -67,15 +64,7 @@ const app = express();
 app.use(cors({ origin: CORS_ORIGIN, credentials: true }));
 app.use(express.json());
 app.get('/health', (_req, res) => res.json({ ok: true, service: 'redline-protocol', phase: room.phase, players: room.players.size, capacity: room.capacity }));
-
-const distClient = join(dirname(fileURLToPath(import.meta.url)), '../client');
-const distClientIndex = join(distClient, 'index.html');
-if (existsSync(distClientIndex)) {
-  app.use(express.static(distClient));
-  app.get('*', (_req, res) => res.sendFile(distClientIndex));
-} else {
-  app.get('/', (_req, res) => res.json({ ok: true, service: 'redline-protocol', message: 'Backend is running. Open the frontend at http://localhost:5173.' }));
-}
+app.get('/', (_req, res) => res.json({ ok: true, service: 'redline-protocol', message: 'Backend is running. Open the frontend on its Vercel URL.' }));
 
 const httpServer = createServer(app);
 const io = new Server(httpServer, {
