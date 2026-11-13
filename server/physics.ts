@@ -103,19 +103,66 @@ export function stepPlayer(
 }
 
 export function segmentHitsPlatform(x1: number, y1: number, x2: number, y2: number, platforms: Platform[] = PLATFORM_LAYOUT): boolean {
-  const distance = Math.hypot(x2 - x1, y2 - y1);
-  const steps = Math.max(1, Math.ceil(distance / 12));
-  for (let i = 1; i <= steps; i += 1) {
-    const t = i / steps;
-    const x = x1 + (x2 - x1) * t;
-    const y = y1 + (y2 - y1) * t;
-    if (isPointBlocked(x, y, platforms)) return true;
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+  for (const platform of platforms) {
+    if (segmentIntersectsRect(x1, y1, dx, dy, platform)) return true;
   }
   return false;
+}
+
+function segmentIntersectsRect(x: number, y: number, dx: number, dy: number, platform: Platform): boolean {
+  let near = 0;
+  let far = 1;
+  const left = platform.x;
+  const right = platform.x + platform.width;
+  const top = platform.y;
+  const bottom = platform.y + platform.height;
+  const minX = Math.min(x, x + dx);
+  const maxX = Math.max(x, x + dx);
+  const minY = Math.min(y, y + dy);
+  const maxY = Math.max(y, y + dy);
+  if (maxX < left || minX > right || maxY < top || minY > bottom) return false;
+
+  let p = -dx;
+  let q = x - left;
+  if (p === 0) { if (q < 0) return false; }
+  else {
+    const ratio = q / p;
+    if (p < 0) { if (ratio > far) return false; if (ratio > near) near = ratio; }
+    else { if (ratio < near) return false; if (ratio < far) far = ratio; }
+  }
+  p = dx;
+  q = right - x;
+  if (p === 0) { if (q < 0) return false; }
+  else {
+    const ratio = q / p;
+    if (p < 0) { if (ratio > far) return false; if (ratio > near) near = ratio; }
+    else { if (ratio < near) return false; if (ratio < far) far = ratio; }
+  }
+  p = -dy;
+  q = y - top;
+  if (p === 0) { if (q < 0) return false; }
+  else {
+    const ratio = q / p;
+    if (p < 0) { if (ratio > far) return false; if (ratio > near) near = ratio; }
+    else { if (ratio < near) return false; if (ratio < far) far = ratio; }
+  }
+  p = dy;
+  q = bottom - y;
+  if (p === 0) { if (q < 0) return false; }
+  else {
+    const ratio = q / p;
+    if (p < 0) { if (ratio > far) return false; if (ratio > near) near = ratio; }
+    else { if (ratio < near) return false; if (ratio < far) far = ratio; }
+  }
+  return true;
 }
 
 export function circleHitsPlayer(x: number, y: number, radius: number, player: { x: number; y: number }): boolean {
   const closestX = Math.max(player.x, Math.min(x, player.x + WORLD.playerWidth));
   const closestY = Math.max(player.y, Math.min(y, player.y + WORLD.playerHeight));
-  return Math.hypot(x - closestX, y - closestY) <= radius;
+  const dx = x - closestX;
+  const dy = y - closestY;
+  return dx * dx + dy * dy <= radius * radius;
 }

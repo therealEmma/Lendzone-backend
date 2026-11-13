@@ -79,20 +79,118 @@ export function stepPlayer(player, input, dt, platforms = PLATFORM_LAYOUT) {
     }
 }
 export function segmentHitsPlatform(x1, y1, x2, y2, platforms = PLATFORM_LAYOUT) {
-    const distance = Math.hypot(x2 - x1, y2 - y1);
-    const steps = Math.max(1, Math.ceil(distance / 12));
-    for (let i = 1; i <= steps; i += 1) {
-        const t = i / steps;
-        const x = x1 + (x2 - x1) * t;
-        const y = y1 + (y2 - y1) * t;
-        if (isPointBlocked(x, y, platforms))
+    const dx = x2 - x1;
+    const dy = y2 - y1;
+    for (const platform of platforms) {
+        if (segmentIntersectsRect(x1, y1, dx, dy, platform))
             return true;
     }
     return false;
 }
+function segmentIntersectsRect(x, y, dx, dy, platform) {
+    let near = 0;
+    let far = 1;
+    const left = platform.x;
+    const right = platform.x + platform.width;
+    const top = platform.y;
+    const bottom = platform.y + platform.height;
+    const minX = Math.min(x, x + dx);
+    const maxX = Math.max(x, x + dx);
+    const minY = Math.min(y, y + dy);
+    const maxY = Math.max(y, y + dy);
+    if (maxX < left || minX > right || maxY < top || minY > bottom)
+        return false;
+    let p = -dx;
+    let q = x - left;
+    if (p === 0) {
+        if (q < 0)
+            return false;
+    }
+    else {
+        const ratio = q / p;
+        if (p < 0) {
+            if (ratio > far)
+                return false;
+            if (ratio > near)
+                near = ratio;
+        }
+        else {
+            if (ratio < near)
+                return false;
+            if (ratio < far)
+                far = ratio;
+        }
+    }
+    p = dx;
+    q = right - x;
+    if (p === 0) {
+        if (q < 0)
+            return false;
+    }
+    else {
+        const ratio = q / p;
+        if (p < 0) {
+            if (ratio > far)
+                return false;
+            if (ratio > near)
+                near = ratio;
+        }
+        else {
+            if (ratio < near)
+                return false;
+            if (ratio < far)
+                far = ratio;
+        }
+    }
+    p = -dy;
+    q = y - top;
+    if (p === 0) {
+        if (q < 0)
+            return false;
+    }
+    else {
+        const ratio = q / p;
+        if (p < 0) {
+            if (ratio > far)
+                return false;
+            if (ratio > near)
+                near = ratio;
+        }
+        else {
+            if (ratio < near)
+                return false;
+            if (ratio < far)
+                far = ratio;
+        }
+    }
+    p = dy;
+    q = bottom - y;
+    if (p === 0) {
+        if (q < 0)
+            return false;
+    }
+    else {
+        const ratio = q / p;
+        if (p < 0) {
+            if (ratio > far)
+                return false;
+            if (ratio > near)
+                near = ratio;
+        }
+        else {
+            if (ratio < near)
+                return false;
+            if (ratio < far)
+                far = ratio;
+        }
+    }
+    return true;
+}
 export function circleHitsPlayer(x, y, radius, player) {
     const closestX = Math.max(player.x, Math.min(x, player.x + WORLD.playerWidth));
     const closestY = Math.max(player.y, Math.min(y, player.y + WORLD.playerHeight));
-    return Math.hypot(x - closestX, y - closestY) <= radius;
+    const dx = x - closestX;
+    const dy = y - closestY;
+    return dx * dx + dy * dy <= radius * radius;
 }
 //# sourceMappingURL=physics.js.map

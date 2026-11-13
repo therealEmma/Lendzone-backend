@@ -51,6 +51,7 @@ interface ServerPlayer {
   nextShotAt: number;
   input: InputCommand;
   lastInputSeq: number;
+  lastInputAt: number;
   score: ScoreLine;
   joinedAt: number;
 }
@@ -128,7 +129,7 @@ function newPlayer(socketId: string, payload: JoinPayload, now: number): ServerP
     id: randomUUID(), socketId, name: cleanName(payload.name), color: cleanColor(payload.color),
     x: 0, y: 0, vx: 0, vy: 0, grounded: false, fuel: WORLD.maxFuel, jetpacking: false,
     aimAngle: 0, hp: WORLD.playerMaxHp, ammo: WORLD.magazineSize, alive: true, respawnAt: null,
-    spawnProtectedUntil: 0, reloadEndsAt: null, nextShotAt: 0, input: defaultInput(), lastInputSeq: 0,
+    spawnProtectedUntil: 0, reloadEndsAt: null, nextShotAt: 0, input: defaultInput(), lastInputSeq: 0, lastInputAt: 0,
     score: { kills: 0, deaths: 0, damage: 0 }, joinedAt: now,
   };
   resetPhysicsPlayer(player, room.spawnCursor++);
@@ -181,6 +182,10 @@ function createSnapshot(now: number): GameSnapshot {
 }
 
 function broadcastSnapshot(now = Date.now()): void {
+  if (room.players.size === 0) {
+    room.lastSnapshotAt = now;
+    return;
+  }
   room.lastSnapshotAt = now;
   io.to(ROOM_ID).volatile.emit('snapshot', createSnapshot(now));
 }
@@ -359,9 +364,9 @@ function updatePlayer(player: ServerPlayer, dt: number, now: number): void {
       ttl: WORLD.bulletLifetime,
     };
     room.projectiles.set(projectile.id, projectile);
-    // Reliable shot events make short-lived bullets visible to remote clients even
-    // when a projectile is created and hits between two volatile snapshots.
-    io.to(ROOM_ID).emit('shot', { id: projectile.id, ownerId: projectile.ownerId, x: projectile.x, y: projectile.y, vx: projectile.vx, vy: projectile.vy });
+    // Shots are also present in snapshots. Volatile delivery keeps a slow client
+    // from building a reliable event backlog during a full-room firefight.
+    io.to(ROOM_ID).volatile.emit('shot', { id: projectile.id, ownerId: projectile.ownerId, x: projectile.x, y: projectile.y, vx: projectile.vx, vy: projectile.vy });
     if (DEBUG_COMBAT) console.log(`[combat] shot room=${ROOM_ID} player=${player.id} projectile=${projectile.id} angle=${angle.toFixed(3)}`);
     player.ammo -= 1;
     player.nextShotAt = now + WORLD.fireInterval * 1000;
@@ -433,6 +438,7 @@ io.on('connection', (socket) => {
           // Input sequence numbers are scoped to a socket connection. Resetting
           // them here prevents a reconnect from being ignored forever.
           player.lastInputSeq = 0;
+          player.lastInputAt = 0;
           player.input = defaultInput();
         }
       }
@@ -463,7 +469,10 @@ io.on('connection', (socket) => {
   socket.on('input', (input: InputCommand) => {
     const player = room.players.get(socket.data.playerId);
     if (!player || !input || typeof input.seq !== 'number') return;
+    const now = Date.now();
+    if (now - player.lastInputAt < 8) return;
     if (input.seq <= player.lastInputSeq) return;
+    player.lastInputAt = now;
     player.lastInputSeq = input.seq;
     player.input = {
       seq: player.lastInputSeq,
