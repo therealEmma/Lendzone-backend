@@ -18,7 +18,7 @@ export const WORLD = {
     jetpackFuelPerSecond: 34,
     fuelRechargePerSecond: 25,
     tickRate: 30,
-    snapshotRate: 12,
+    snapshotRate: 20,
 };
 export const PLATFORM_LAYOUT = [
     { x: 0, y: 1140, width: 2400, height: 60, kind: 'ground' },
